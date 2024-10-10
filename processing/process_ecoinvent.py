@@ -14,10 +14,11 @@ df = pandas.read_excel("Database-Overview-for-ecoinvent-v3.10.xlsx",
                        sheet_name="EN15804 AO")
 
 columns = ['Product UUID',
-           'Reference Product Name',
+           'Activity Name', # production -> activity name
            'CPC Classification',
            'Product Information']
-rows = df[columns].drop_duplicates().values
+rows = df[columns].drop_duplicates()
+rows = rows[rows['Activity Name'].str.contains('production')].values
 
 embeddings = HuggingFaceEmbeddingModel()
 dimensions = len(embeddings.embed_query("dummy"))
@@ -30,13 +31,13 @@ vector_store = FAISS(embedding_function=embeddings,
 
 for row in tqdm(rows):
     doc = Document(
-        page_content="Product Name: {}\nProduct Information: {}\nClassification:{}".format(
+        page_content="Industrial activity name: {}\n\nActivity Information:\n\n{}\n\nClassification:{}".format(
             row[1],
             row[3],
             row[2]),
         metadata={"UUID": row[0],
                   "name": row[1]}
     )
-    vector_store.add_documents([doc], ids=[row[0]])
+    vector_store.add_documents([doc])
 
 vector_store.save_local("ecoinvent_index_gemma7b")

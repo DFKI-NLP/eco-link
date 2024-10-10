@@ -9,7 +9,7 @@ sentences = ["The quick brown fox jumps over the lazy dog.",
 
 class HuggingFaceEmbeddingModel(Embeddings):
     def __init__(self):
-        self.model = SentenceTransformer('BAAI/bge-large-zh-v1.5')
+        self.model = SentenceTransformer('Alibaba-NLP/gte-large-en-v1.5', trust_remote_code=True)
     def embed_documents(self, texts):
         embeddings = self.model.encode(texts, normalize_embeddings=True)
         return embeddings
