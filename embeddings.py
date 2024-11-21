@@ -1,5 +1,3 @@
-from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification
-import torch
 from langchain_core.embeddings import Embeddings
 from sentence_transformers import SentenceTransformer
 

@@ -4,11 +4,9 @@ from langchain_core.prompts import PromptTemplate
 from langchain_community.llms import Ollama
 from embeddings import HuggingFaceEmbeddingModel
 import os
-import pandas as pd
 from langchain_community.retrievers import TavilySearchAPIRetriever
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
 import prompts
-from tika import parser
 
 with open('tavily_api_key.txt', 'r') as f:
     api_key = f.readline()
@@ -16,7 +14,7 @@ os.environ['TAVILY_API_KEY'] = api_key
 
 class EcoinventRecommendation:
 
-    def __init__(self, model_name="llama3.1:8b"):
+    def __init__(self, model_name='llama3.1:8b', index_file='ecoinvent_index'):
         # Initialize the model and retriever
         embeddings = HuggingFaceEmbeddingModel()
 
@@ -40,7 +38,7 @@ class EcoinventRecommendation:
         self.retriever = TavilySearchAPIRetriever(k=5)
 
         self.db = FAISS.load_local(
-            "processing/ecoinvent_index_gemma7b", embeddings, allow_dangerous_deserialization=True
+            index_file, embeddings, allow_dangerous_deserialization=True
         )
 
         # Initialize query attributes

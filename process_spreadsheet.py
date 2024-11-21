@@ -1,6 +1,5 @@
 import pandas as pd
 from query import EcoinventRecommendation
-import csv
 import argparse
 
 if __name__ == '__main__':

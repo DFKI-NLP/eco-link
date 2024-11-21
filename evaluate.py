@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from query import EcoinventRecommendation
 
 if __name__ == '__main__':
