@@ -1,111 +1,149 @@
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import ChatHuggingFace
 from langchain_huggingface import HuggingFacePipeline, HuggingFaceEndpoint
 from langchain_core.prompts import PromptTemplate
 from langchain_community.llms import Ollama
-from langchain_community.embeddings import OllamaEmbeddings
 from embeddings import HuggingFaceEmbeddingModel
-import getpass
 import os
+import pandas as pd
 from langchain_community.retrievers import TavilySearchAPIRetriever
-from transformers import AutoModelForCausalLM, AutoTokenizer,pipeline, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
+import prompts
+from tika import parser
 
-
-api_key = ""
+with open('tavily_api_key.txt', 'r') as f:
+    api_key = f.readline()
 os.environ['TAVILY_API_KEY'] = api_key
-import argparse
 
-class DocumentRecommendation():
+class EcoinventRecommendation:
 
-    def __init__(self, model_name=None):
+    def __init__(self, model_name="llama3.1:8b"):
+        # Initialize the model and retriever
         embeddings = HuggingFaceEmbeddingModel()
 
         if model_name == 'llama3.1:8b':
-            llm = Ollama(model=model_name)
+            self.llm = Ollama(model=model_name)
         else:
             tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-            model = AutoModelForCausalLM.from_pretrained(model_name,
-                                                         trust_remote_code=True,
-                                                         load_in_4bit=True)
-
+            model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                load_in_4bit=True
+            )
+            pipe = pipeline(
+                task='text-generation',
+                model=model,
+                tokenizer=tokenizer,
+                max_new_tokens=1000,
+                return_full_text=False
+            )
+            self.llm = HuggingFacePipeline(pipeline=pipe)
         self.retriever = TavilySearchAPIRetriever(k=5)
 
-        template = \
-        \
-"""======================================================
+        self.db = FAISS.load_local(
+            "processing/ecoinvent_index_gemma7b", embeddings, allow_dangerous_deserialization=True
+        )
 
-Component "{component_name}" is one of many components used to make a manufactured product.
-The product is described as "{product_description}".
-{component_name} is made of material "{material}".
-The manufacturer of {component_name} is "{producer}".
+        # Initialize query attributes
+        self.set_query()  # Start with a clean state
 
-You must answer correctly.
-Provide the generic name of the material production activity in English for the component "{component_name}".
-The component name and material may be in a language other than English, so translate it to English to understand the component and material.
-Examples of production activities are "aluminium production, primary, ingot" or "acetaldehyde production, ethylene oxidation".
-Following this, provide a one-sentence technical description of the material.
-If possible, provide a one-sentence technical description of the process.
-If unsure, make your best guess.
-Do not provide any additional response. Any additional response beyond these items will be considered incorrect.
+    def set_query(self,
+                  component_name=None,
+                  producer=None,
+                  material=None,
+                  product_description=None,
+                  datasheet_content=None,
+                  search_query=None,
+                  search_results=None):
+        """
+        Resets and sets the internal state of the class for a new query.
+        Parameters must be explicitly named to ensure clarity when resetting or updating the query.
+        """
+        self.component_name = component_name if component_name is not None else 'unknown'
+        self.producer = producer if producer is not None else 'unknown'
+        self.material = material if material is not None else 'unknown'
+        self.product_description = product_description if product_description is not None else 'unknown'
+        self.datasheet_content = datasheet_content if datasheet_content is not None else 'unknown'
+        self.search_query = search_query if search_query is not None else 'unknown'
+        self.search_results = search_results if search_results is not None else 'unknown'
 
-======================================================
+    def get_search_results(self):
+        """
+        Perform a web search based on the current state of the attributes.
+        Updates the search_query and search_results attributes.
+        """
+        prompt = PromptTemplate.from_template(prompts.web_query_prompt)
+        query_chain = prompt | self.llm
 
-An example of a correctly formatted response:
+        # Create info_dict dynamically for the prompt
+        info_dict = {
+            "component_name": self.component_name,
+            "producer": self.producer,
+            "material": self.material,
+            "product_description": self.product_description,
+        }
 
-Industrial activity name: C3 hydrocarbon production, mixture, petroleum refinery operation
-Activity information: 
-Gaseous mixture of C3-hydrocarbons, yielded from petroleum refinery operation, assumed to consists of 68% propene (also known as propylene or methyl ethylene) and 32% propane
-Transformation process of crude oil entering the petroleum refinery ending with refinery products leaving the petroleum refinery.
+        # Generate the search query
+        query = query_chain.invoke(info_dict)
+        self.search_query = query
 
-======================================================
+        # Fetch and store search results
+        self.search_results = self.retriever.invoke(query)
 
-Component "{component_name}" is one of many components used to make a manufactured product.
-The product is described as "{product_description}".
-The list of all materials and components used to make "{product_description}":
+    def dynamic_prompt_builder(self):
+        """
+        Build the prompt dynamically based on the current attributes.
+        """
+        context_parts = []
 
-{items}
+        if self.search_query != 'unknown' and self.search_results != 'unknown':
+            context_parts.append(prompts.search_context.format(
+                search_query=self.search_query,
+                search_results=self.search_results
+            ))
+        if self.datasheet_content != 'unknown':
+            context_parts.append(prompts.datasheet_context.format(
+                component_name=self.component_name,
+                datasheet_content=self.datasheet_content
+            ))
 
-"""
+        base_prompt = (
+            prompts.instructions +
+            prompts.response_example +
+            ''.join(context_parts) +
+            prompts.query
+        )
+        return base_prompt
 
-        prompt = PromptTemplate.from_template(template)
-        self.chain = prompt | llm
-        self.db = FAISS.load_local("processing/ecoinvent_index_gemma7b", embeddings, allow_dangerous_deserialization=True)
+    def get_matches(self):
+        """
+        Get matches for the component based on the current state of the attributes.
+        Assumes that the web search (if needed) has already been performed by the user.
+        """
+        # Build the prompt dynamically
+        prompt_text = self.dynamic_prompt_builder()
+        prompt = PromptTemplate.from_template(prompt_text)
+        chain = prompt | self.llm
 
-    def get_matches(self, product_description,
-                    component_name, producer, material,
-                    component_list, producer_list, material_list,
-                    web_search=True):
-        context = 'No context available'
-        if web_search:
-            docs = self.retriever.invoke('{} {} {}'.format(component_name, material, producer))
-            context = "\n\n".join(doc.page_content for doc in docs)
+        # Create info_dict dynamically for the prompt
+        info_dict = {
+            "component_name": self.component_name,
+            "producer": self.producer,
+            "material": self.material,
+            "product_description": self.product_description,
+            "datasheet_content": self.datasheet_content,
+            "search_query": self.search_query,
+            "search_results": self.search_results,
+        }
 
-        chat_response = self.chain.invoke({'product_description': product_description,
-                                           'component_name': component_name,
-                                           'material': material,
-                                           'producer': producer,
-                                           'items': '\n'.join(['{}, {}, {}'.format(c,m,p)
-                                                               for c,m,p in zip(component_list,material_list, producer_list)])})
+        # Get response and similarity ranking
+        chat_response = chain.invoke(info_dict)
+        return chat_response, self.document_similarity_ranking(chat_response)
 
-        print(chat_response)
-        docs = self.db.similarity_search_with_score(chat_response, k=5)
+    def document_similarity_ranking(self, query_text, k=5):
+        docs = self.db.similarity_search_with_score(query_text, k=k)
         doc_titles = []
         dists = []
         for doc, dist in docs:
-            doc_titles.append(doc.metadata['name'] if 'name' in doc.metadata else '')
+            doc_titles.append(doc.metadata.get('name', ''))
             dists.append(dist)
-        print(doc_titles)
-        return doc_titles, dists, chat_response
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser("query")
-    parser.add_argument('component')
-    parser.add_argument('producer')
-    args = parser.parse_args()
-
-    recommender = DocumentRecommendation(model_name='llama3.1:8b')
-    matches, distances, _ = recommender.get_matches(args.component, args.producer)
-    for m, d in zip(matches, distances):
-        print('{}: distance={}'.format(m,d))
-
+        return doc_titles, dists

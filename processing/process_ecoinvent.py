@@ -31,7 +31,7 @@ vector_store = FAISS(embedding_function=embeddings,
 
 for row in tqdm(rows):
     doc = Document(
-        page_content="Industrial activity name: {}\n\nActivity Information:\n\n{}\n\nClassification:{}".format(
+        page_content="Industrial activity name: {}\n\n\n\n{}\n\nClassification:{}".format(
             row[1],
             row[3],
             row[2]),
